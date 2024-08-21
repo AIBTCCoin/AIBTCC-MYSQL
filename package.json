@@ -1,11 +1,10 @@
 {
   "name": "aibtccoin",
   "version": "1.0.1",
-  "description": "Simple Blockchain implementation in Javascript. For educational purposes only.",
+  "description": "Blockchain implementation in Javascript.",
   "keywords": [
     "blockchain",
-    "javascript",
-    "tutorial"
+    "javascript"
   ],
   "scripts": {
     "start": "node index.js",
