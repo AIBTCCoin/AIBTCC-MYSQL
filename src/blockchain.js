@@ -16,7 +16,8 @@ class Transaction {
     amount,
     timestamp = Date.now(),
     signature = null,
-    blockHash = ""
+    blockHash = "",
+    originTransactionHash = null
   ) {
     this.fromAddress = fromAddress; // Address sending the funds
     this.toAddress = toAddress; // Address receiving the funds
@@ -24,6 +25,7 @@ class Transaction {
     this.timestamp = timestamp; // Timestamp of when the transaction was created
     this.signature = signature; // Digital signature for transaction validation
     this.blockHash = blockHash; // Hash of the block this transaction is included in (if any)
+    this.originTransactionHash = originTransactionHash;
     this.hash = this.calculateHash(); // Calculate the transaction hash
   }
 
@@ -31,7 +33,7 @@ class Transaction {
   calculateHash() {
     return crypto
       .createHash("sha256")
-      .update(this.fromAddress + this.toAddress + this.amount + this.timestamp)
+      .update(this.fromAddress + this.toAddress + this.amount + this.originTransactionHash + this.timestamp)
       .digest("hex");
   }
 
@@ -81,14 +83,16 @@ class Transaction {
 
   // Save the transaction to the database
   save() {
+    console.log('Saving transaction with originTransactionHash:', this.originTransactionHash);
     return new Promise((resolve, reject) => {
       const query =
-        "INSERT INTO transactions (hash, from_address, to_address, amount, timestamp, signature, block_hash) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        "INSERT INTO transactions (hash, from_address, to_address, amount, origin_transaction_hash, timestamp, signature, block_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
       const values = [
         this.hash,
         this.fromAddress,
         this.toAddress,
         this.amount,
+        this.originTransactionHash,
         this.timestamp,
         this.signature,
         this.blockHash,
@@ -116,7 +120,8 @@ class Transaction {
             txData.amount,
             txData.timestamp,
             txData.signature,
-            txData.block_hash
+            txData.block_hash,
+            txData.origin_transaction_hash 
           );
           tx.hash = txData.hash; // Set the hash
           resolve(tx); // Resolve with the transaction object
@@ -126,7 +131,7 @@ class Transaction {
       });
     });
   }
-
+/*
   // Add Solana-specific transaction handling
   async executeSolanaTransaction(fromKeypair, toAddress) {
     try {
@@ -144,10 +149,12 @@ class Transaction {
       console.error("Solana transaction failed:", error);
     }
   }
+*/
+  
 
   async savePending() {
     const query =
-      "INSERT INTO pending_transactions (hash, from_address, to_address, amount, timestamp, signature) VALUES (?, ?, ?, ?, ?, ?)";
+      "INSERT INTO pending_transactions (hash, from_address, to_address, amount, timestamp, signature, origin_transaction_hash) VALUES (?, ?, ?, ?, ?, ?, ?)";
     const values = [
       this.calculateHash(),
       this.fromAddress,
@@ -155,6 +162,7 @@ class Transaction {
       this.amount,
       this.timestamp,
       this.signature,
+      this.originTransactionHash,
     ];
 
     console.log(`Saving transaction with hash: ${values[0]}`);
@@ -166,6 +174,7 @@ class Transaction {
         amount: values[3],
         timestamp: values[4],
         signature: values[5],
+        originTransactionHash: values[6],
       })}`
     );
 
@@ -181,6 +190,7 @@ class Transaction {
       });
     });
   }
+  
 
   // Load all pending transactions
   static async loadPendingTransactions() {
@@ -247,7 +257,47 @@ class Transaction {
       });
     });
   }
+  // Get the latest transaction for a given address
+  static async getLatestTransactionForAddress(address) {
+    return new Promise((resolve, reject) => {
+      const query = `
+        SELECT * 
+        FROM transactions 
+        WHERE from_address = ? 
+        ORDER BY timestamp DESC 
+        LIMIT 1
+      `;
+  
+      db.query(query, [address], (err, results) => {
+        if (err) {
+          console.error("Error fetching latest transaction:", err);
+          return reject(err);
+        }
+  
+        if (results.length === 0) {
+          console.log("No transactions found for address:", address);
+          return resolve(null);
+        }
+  
+        const txData = results[0];
+        const tx = new Transaction(
+          txData.from_address,
+          txData.to_address,
+          txData.amount,
+          txData.timestamp,
+          txData.signature,
+          txData.block_hash,
+          txData.origin_transaction_hash
+        );
+        tx.hash = txData.hash;
+  
+        console.log("Loaded latest transaction:", tx);
+        resolve(tx);
+      });
+    });
+  }  
 }
+
 
 class Block {
   constructor(index, previousHash, timestamp, transactions, difficulty) {
@@ -258,6 +308,7 @@ class Block {
     this.difficulty = difficulty; // Mining difficulty for this block
     this.merkleRoot = this.calculateMerkleRoot(); // Root hash of the Merkle tree
     this.nonce = 0; // Nonce for mining (initially set to 0)
+    this.originTransactionHash = this.calculateLastOriginTransactionHash(); 
     this.hash = this.calculateHash(); // Calculate the block hash
   }
 
@@ -269,6 +320,20 @@ class Block {
     const hashes = this.transactions.map((tx) => tx.hash); // Get hashes of all transactions
     const merkleTree = new MerkleTree(hashes); // Create a Merkle tree with the transaction hashes
     return merkleTree.getRootHash(); // Get the root hash of the Merkle tree
+  }
+
+  calculateLastOriginTransactionHash() {
+    if (this.transactions.length === 0) return null;
+    
+    // Handle the case where the last transaction might be a mining reward with a null originTransactionHash
+    const lastTransaction = this.transactions[this.transactions.length - 1];
+    if (lastTransaction.originTransactionHash) {
+      return lastTransaction.originTransactionHash;
+    }
+    
+    // Return the originTransactionHash of the transaction before the last one
+    const secondToLastTransaction = this.transactions[this.transactions.length - 2];
+    return secondToLastTransaction ? secondToLastTransaction.originTransactionHash : null;
   }
 
   // Calculate the hash of the block
@@ -287,6 +352,7 @@ class Block {
           this.timestamp +
           this.merkleRoot +
           this.nonce +
+          this.originTransactionHash + // Include the last originTransactionHash
           transactionsData
       )
       .digest("hex");
@@ -316,7 +382,7 @@ class Block {
   // Save the block to the database
   async save() {
     const query =
-      "INSERT INTO blocks (hash, previous_hash, timestamp, nonce, difficulty, merkle_root, `index`) VALUES (?, ?, ?, ?, ?, ?, ?)";
+      "INSERT INTO blocks (hash, previous_hash, timestamp, nonce, difficulty, merkle_root, `index`, origin_transaction_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
     const values = [
       this.hash,
       this.previousHash,
@@ -325,6 +391,7 @@ class Block {
       this.difficulty,
       this.merkleRoot,
       this.index,
+      this.originTransactionHash
     ];
     return new Promise((resolve, reject) => {
       db.query(query, values, async (err, results) => {
@@ -484,28 +551,6 @@ class Blockchain {
     return this.chain[this.chain.length - 1];
   }
 
-  async addInitialBalance(address, amount) {
-    // Create an initial reward transaction
-    const rewardTx = new Transaction(null, address, amount);
-    rewardTx.hash = rewardTx.calculateHash();
-    rewardTx.signature = null; // Reward transactions don't need a signature
-
-    // Create a block with the reward transaction
-    const block = new Block(
-      this.chain.length,
-      this.getLatestBlock().hash,
-      Date.now(),
-      [rewardTx],
-      this.difficulty
-    );
-    block.mineBlock(this.difficulty);
-
-    console.log(`Mined initial block with hash: ${block.hash}`);
-    this.chain.push(block);
-
-    await block.save(); // Save the block to the database
-    console.log(`Initial balance of ${amount} credited to address ${address}`);
-  }
 
   // Mine pending transactions and add a new block to the blockchain
   async minePendingTransactions(miningRewardAddress) {
@@ -550,6 +595,20 @@ class Blockchain {
           blockTransactions,
           this.difficulty
         );
+
+          // Validate the origin transaction hash before adding the block
+        const previousBlock = this.getLatestBlock();
+        const expectedOriginTransactionHash = previousBlock.calculateLastOriginTransactionHash();
+
+        console.log(`Previous block's originTransactionHash: ${expectedOriginTransactionHash}`);
+
+        // Check if the previous block’s originTransactionHash is correct
+        if (previousBlock.originTransactionHash !== expectedOriginTransactionHash) {
+          throw new Error('Previous block has an invalid origin transaction hash');
+        } else {
+          console.log('Previous blocks origin transaction hash verified successfully.');
+        }
+
         block.mineBlock(this.difficulty);
 
         // Log details of the mined block
