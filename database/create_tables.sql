@@ -8,7 +8,8 @@ CREATE TABLE blocks (
   nonce INT,
   difficulty INT,
   merkle_root VARCHAR(64),
-  `index` INT
+  `index` INT,
+  origin_transaction_hash VARCHAR(64)
 );
 
 CREATE TABLE transactions (
@@ -16,6 +17,7 @@ CREATE TABLE transactions (
   from_address VARCHAR(132),
   to_address VARCHAR(132),
   amount DECIMAL(20, 8),
+  origin_transaction_hash VARCHAR(64),
   timestamp BIGINT,
   signature TEXT,
   block_hash VARCHAR(64),
@@ -28,7 +30,8 @@ CREATE TABLE pending_transactions (
   to_address VARCHAR(132),
   amount DECIMAL(20, 8),
   timestamp BIGINT,
-  signature TEXT
+  signature TEXT,
+  origin_transaction_hash VARCHAR(64)
 );
 
 CREATE TABLE merkle_nodes (
