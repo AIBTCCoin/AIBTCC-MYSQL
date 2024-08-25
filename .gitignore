@@ -5,4 +5,7 @@ coverage
 yarn.lockcoverage
 
 # Ignore the create_tables.sql file
-#database/create_tables.sql
+database/create_tables.sql
+
+# Ignore the create_tables.sql file
+AIBTC Guide.pdf

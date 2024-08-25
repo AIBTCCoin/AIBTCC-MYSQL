@@ -8,3 +8,6 @@ src/keygenerator.js
 
 # Ignore the create_tables.sql file
 database/create_tables.sql
+
+# Ignore the create_tables.sql file
+AIBTC Guide.pdf

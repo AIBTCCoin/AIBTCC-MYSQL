@@ -29,7 +29,8 @@ async function main() {
     5. View transactions for address
     6. Trace a transaction
     7. Trace fund movement 
-    8. Exit
+    8. Run transaction and mining test 
+    9. Exit
     `);
 
     const choice = await askQuestion("Select an option: ");
@@ -55,8 +56,11 @@ async function main() {
         break;
       case "7":
         await traceFundMovement();  // New option handled
-        break;     
+        break;
       case "8":
+        await runTransactionAndMiningTest();  // New test option
+          break;       
+      case "9":
         console.log("Exiting...");
         rl.close();
         return;
@@ -339,6 +343,57 @@ function displayTransactionDetails(transaction, blockIndex) {
     Hash: ${transaction.hash}
     Previous Transaction Hash: ${transaction.originTransactionHash}
   `);
+}
+
+async function runTransactionAndMiningTest() {
+  let previousTransactionHash = null;
+  let wallets = [];
+
+  // Create two wallets to use for transactions
+  for (let i = 0; i < 2; i++) {
+    const wallet = createNewWallet();
+    wallets.push(wallet);
+  }
+
+  // The address that receives the genesis reward
+  const genesisRewardAddress = blockchain.genesisAddress; // Save the genesis block reward recipient address
+
+  for (let i = 0; i < 1000; i++) {
+    const toWallet = wallets[i % 2]; // Alternating recipient wallets
+
+    const fromAddress = genesisRewardAddress; // Always send from the genesis reward address
+    const toAddress = toWallet.address;
+    const amount = 10;
+    const timestamp = Date.now();
+
+    // Create the transaction
+    const tx = new Transaction(fromAddress, toAddress, amount, timestamp, null, '', previousTransactionHash);
+
+    // Sign the transaction
+    tx.signWithAddress(fromAddress);
+
+    // Save the transaction to pending transactions
+    await tx.savePending();
+    blockchain.pendingTransactions.push(tx);
+
+    // Update the previousTransactionHash for the next transaction
+    previousTransactionHash = tx.hash;
+
+    // If the pending transactions reach the threshold, mine a new block
+    if (blockchain.pendingTransactions.length >= blockchain.transactionThreshold) {
+      console.log(`Mining block for transactions ${i-1} and ${i}...`);
+      await blockchain.minePendingTransactions(blockchain.minerAddress);
+      console.log(`Block mined. Current chain length: ${blockchain.chain.length}`);
+    }
+  }
+
+  // Ensure that there are no unmined transactions left at the end
+  if (blockchain.pendingTransactions.length > 0) {
+    console.log('Final mining to clear remaining transactions...');
+    await blockchain.minePendingTransactions(blockchain.minerAddress);
+  }
+
+  console.log(`Test complete. Total blocks mined: ${blockchain.chain.length - 1}`);
 }
 
 
