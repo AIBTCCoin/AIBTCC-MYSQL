@@ -4,3 +4,7 @@ src/keygenerator.js
 .eslintrc.js
 .travis.yml
 .nyc_output
+
+
+# Ignore the create_tables.sql file
+database/create_tables.sql
