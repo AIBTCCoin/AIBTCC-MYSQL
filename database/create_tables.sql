@@ -9,7 +9,7 @@ CREATE TABLE blocks (
   difficulty INT,
   merkle_root VARCHAR(64),
   `index` INT,
-  origin_transaction_hash VARCHAR(64)
+  origin_transaction_hash VARCHAR(64) NULL
 );
 
 CREATE TABLE transactions (
@@ -17,10 +17,10 @@ CREATE TABLE transactions (
   from_address VARCHAR(132),
   to_address VARCHAR(132),
   amount DECIMAL(20, 8),
-  origin_transaction_hash VARCHAR(64),
+  origin_transaction_hash VARCHAR(64) NULL,
   timestamp BIGINT,
   signature TEXT,
-  block_hash VARCHAR(64),
+  block_hash VARCHAR(64) NULL,
   FOREIGN KEY (block_hash) REFERENCES blocks(hash)
 );
 
@@ -49,4 +49,9 @@ CREATE TABLE merkle_proof_paths (
   transaction_hash VARCHAR(64),
   proof_path TEXT,
   FOREIGN KEY (block_hash) REFERENCES blocks(hash)
+);
+
+CREATE TABLE address_balances (
+  address VARCHAR(132) PRIMARY KEY,
+  balance DECIMAL(20, 8)
 );

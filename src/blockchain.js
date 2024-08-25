@@ -45,7 +45,9 @@ class Transaction {
       
       // Sign the transaction
       const hashTx = this.calculateHash();
+      console.log(`Signing transaction with hash: ${hashTx}`);
       const signature = keyPair.sign(hashTx, 'hex');
+      console.log(`Generated signature: ${signature.toDER('hex')}`);
       this.signature = signature.toDER('hex');
     } catch (error) {
       throw new Error('Failed to sign with address: ' + error.message);
@@ -69,20 +71,26 @@ class Transaction {
   // Validate the transaction
   isValid() {
     const hashToVerify = this.calculateHash(); // Calculate the hash to verify
+    console.log(`Hash to verify: ${hashToVerify}`);
+    console.log(`Transaction signature: ${this.signature}`);
     if (this.fromAddress === null) return true; // Allow transactions with no sender (e.g., mining reward)
     if (!this.signature || this.signature.length === 0) {
-      return false; // Transaction must be signed
+      throw new Error("Transaction signature is missing or invalid!");
     }
     try {
       const key = ec.keyFromPublic(this.fromAddress, "hex"); // Load the public key from the address
-      return key.verify(hashToVerify, this.signature); // Verify the signature
+      const isValid = key.verify(hashToVerify, this.signature);
+      console.log(`Signature validity: ${isValid}`);
+      return isValid;
     } catch (error) {
-      return false; // If any error occurs, the transaction is invalid
+      throw new Error("Transaction signature is invalid!");
     }
   }
 
   // Save the transaction to the database
   save() {
+    this.verifyTransaction();
+
     console.log('Saving transaction with originTransactionHash:', this.originTransactionHash);
     return new Promise((resolve, reject) => {
       const query =
@@ -124,6 +132,9 @@ class Transaction {
             txData.origin_transaction_hash 
           );
           tx.hash = txData.hash; // Set the hash
+
+          tx.verifyTransaction();
+
           resolve(tx); // Resolve with the transaction object
         } else {
           resolve(null); // If no results found, resolve with null
@@ -296,6 +307,13 @@ class Transaction {
       });
     });
   }  
+
+  verifyTransaction() {
+    const expectedHash = this.calculateHash();
+    if (this.hash !== expectedHash) {
+      throw new Error("Transaction hash does not match expected hash!");
+    }
+  }
 }
 
 
@@ -369,10 +387,20 @@ class Block {
   }
 
   // Check if all transactions in the block are valid
-  hasValidTransactions() {
+  async hasValidTransactions() {
     for (const tx of this.transactions) {
+
+      tx.verifyTransaction();
+
       if (!tx.isValid()) {
         console.error(`Invalid transaction: ${tx.hash}`); // Log invalid transactions
+        return false;
+      }
+
+      // Check if the sender has enough balance
+      const balance = await this.getBalanceOfAddress(tx.fromAddress);
+      if (balance < tx.amount) {
+        console.error(`Insufficient balance for transaction: ${tx.hash}`);
         return false;
       }
     }
@@ -403,6 +431,8 @@ class Block {
             tx.blockHash = this.hash;
             await tx.save();
           }
+
+          await this.updateBalances(); // Update balances after saving transactions
 
           const merkleTree = new MerkleTree(
             this.transactions.map((tx) => tx.hash)
@@ -493,6 +523,50 @@ class Block {
       });
     });
   }
+
+  async updateBalances() {
+    for (const tx of this.transactions) {
+      if (tx.fromAddress) {
+        await this.updateAddressBalance(tx.fromAddress, -tx.amount);
+      }
+      if (tx.toAddress) {
+        await this.updateAddressBalance(tx.toAddress, tx.amount);
+      }
+    }
+  }
+
+  async updateAddressBalance(address, amount) {
+    return new Promise((resolve, reject) => {
+      const query = `
+        INSERT INTO address_balances (address, balance)
+        VALUES (?, ?)
+        ON DUPLICATE KEY UPDATE balance = balance + ?
+      `;
+      db.query(query, [address, amount, amount], (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
+
+  async validateBlockTransactions() {
+    for (const tx of this.transactions) {
+      // Validate each transaction's hash and signature
+      if (!tx.isValid()) {
+        console.error(`Invalid transaction: ${tx.hash}`);
+        return false;
+      }
+
+      // Check if the transaction's state is reflected in the database
+      const dbTx = await Transaction.load(tx.hash);
+      if (!dbTx || dbTx.calculateHash() !== tx.calculateHash()) {
+        console.error(`Transaction ${tx.hash} has been tampered with.`);
+        return false;
+      }
+    }
+    return true;
+  }
+  
 }
 
 class Blockchain {
@@ -595,6 +669,8 @@ class Blockchain {
           blockTransactions,
           this.difficulty
         );
+
+        
 
           // Validate the origin transaction hash before adding the block
         const previousBlock = this.getLatestBlock();
@@ -748,6 +824,49 @@ class Blockchain {
       });
     });
   }
+
+  async validateDatabaseState() {
+    // Fetch all transactions from the blockchain
+    const transactions = await this.getAllTransactions();
+
+    // Calculate expected balances
+    const calculatedBalances = {};
+    for (const tx of transactions) {
+      if (!calculatedBalances[tx.fromAddress]) calculatedBalances[tx.fromAddress] = 0;
+      if (!calculatedBalances[tx.toAddress]) calculatedBalances[tx.toAddress] = 0;
+      calculatedBalances[tx.fromAddress] -= tx.amount;
+      calculatedBalances[tx.toAddress] += tx.amount;
+    }
+
+    // Compare with database balances
+    for (const [address, balance] of Object.entries(calculatedBalances)) {
+      const dbBalance = await this.getBalanceOfAddress(address);
+      if (dbBalance !== balance) {
+        console.error(`Balance mismatch for address ${address}: expected ${balance}, found ${dbBalance}`);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async getAllTransactions() {
+    return new Promise((resolve, reject) => {
+      const query = "SELECT * FROM transactions";
+      db.query(query, (err, results) => {
+        if (err) return reject(err);
+        resolve(results.map(result => new Transaction(
+          result.from_address,
+          result.to_address,
+          result.amount,
+          result.timestamp,
+          result.signature,
+          result.block_hash,
+          result.origin_transaction_hash
+        )));
+      });
+    });
+  }
+
 }
 
 // Check pending transactions

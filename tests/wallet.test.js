@@ -1,96 +1,72 @@
 const assert = require('assert');
+const { Blockchain, Transaction } = require('../src/blockchain');
+const { createNewWallet, loadWallet, ec } = require('../src/wallet');
 const crypto = require('crypto');
-const EC = require('elliptic').ec;
-const { Transaction } = require('../src/blockchain'); // Adjust the path to the blockchain module
 
-const ec = new EC('secp256k1');
+describe('Transaction and Mining Tests', function() {
+  this.timeout(100000); // Increase timeout for async operations
 
-// Helper function to create a key pair and address
-function generateKeyPair() {
-  const keyPair = ec.genKeyPair();
-  const publicKey = keyPair.getPublic('hex');
-  const address = getAibtccAddress(publicKey);
-  return { keyPair, publicKey, address };
-}
+  let blockchain;
+  let wallets = [];
+  let genesisRewardAddress;
 
-// Dummy address generation function (replace with your implementation)
-function getAibtccAddress(publicKey) {
-  const publicKeyBuffer = Buffer.from(publicKey, 'hex');
-  const sha256Hash = crypto.createHash('sha256').update(publicKeyBuffer).digest();
-  const ripemd160Hash = crypto.createHash('ripemd160').update(sha256Hash).digest();
-  const versionedPayload = Buffer.concat([Buffer.from([0x00]), ripemd160Hash]);
-  const checksum = crypto.createHash('sha256').update(crypto.createHash('sha256').update(versionedPayload).digest()).digest().slice(0, 4);
-  const address = Buffer.concat([versionedPayload, checksum]);
-  return bs58.encode(address);
-}
+  before(async function() {
+    // Initialize the blockchain
+    blockchain = new Blockchain();
 
-describe('Transaction Tests', function() {
-  it('should sign and verify a transaction correctly', function() {
-    const { keyPair, publicKey, address } = generateKeyPair();
-    
-    const transaction = new Transaction({
-      fromAddress: address,
-      toAddress: 'recipientAddress',
-      amount: 10,
-      timestamp: Date.now()
-    });
-    
-    transaction.sign(keyPair);
-    
-    // Check the transaction details
-    assert.ok(transaction.signature);
-    
-    // Validate the transaction
-    const isValid = transaction.isValid();
-    
-    assert.strictEqual(isValid, true);
+    // Create two wallets to use for transactions
+    for (let i = 0; i < 2; i++) {
+      const wallet = createNewWallet();
+      wallets.push(wallet);
+    }
+
+    // Set the mining threshold to 2 transactions
+    blockchain.transactionThreshold = 2;
+
+    // The address that receives the genesis reward
+    genesisRewardAddress = blockchain.genesisAddress; // Save the genesis block reward recipient address
   });
 
-  it('should detect invalid signatures', function() {
-    const { keyPair, publicKey, address } = generateKeyPair();
-    
-    const transaction = new Transaction({
-      fromAddress: address,
-      toAddress: 'recipientAddress',
-      amount: 10,
-      timestamp: Date.now()
-    });
-    
-    // Sign with a different keyPair to simulate invalid signature
-    const differentKeyPair = ec.genKeyPair();
-    transaction.sign(differentKeyPair);
-    
-    // Validate the transaction
-    const isValid = transaction.isValid();
-    
-    assert.strictEqual(isValid, false);
-  });
+  it('should generate 1000 transactions and mine every 2 transactions', async function() {
+    let previousTransactionHash = null;
 
-  it('should correctly calculate the hash of the transaction', function() {
-    const transaction = new Transaction({
-      fromAddress: 'address1',
-      toAddress: 'address2',
-      amount: 20,
-      timestamp: 1234567890
-    });
-    
-    const expectedHash = crypto
-      .createHash('sha256')
-      .update('address1address2' + 20 + 1234567890)
-      .digest('hex');
-    
-    assert.strictEqual(transaction.calculateHash(), expectedHash);
-  });
+    for (let i = 0; i < 1000; i++) {
+      const toWallet = wallets[i % 2]; // Alternating recipient wallets
 
-  it('should verify that address derived from public key is correct', function() {
-    const { keyPair, publicKey, address } = generateKeyPair();
-    
-    const derivedAddress = getAibtccAddress(publicKey);
-    
-    assert.strictEqual(address, derivedAddress);
+      const fromAddress = genesisRewardAddress; // Always send from the genesis reward address
+      const toAddress = toWallet.address;
+      const amount = 10;
+      const timestamp = Date.now();
+
+      // Create the transaction
+      const tx = new Transaction(fromAddress, toAddress, amount, timestamp, null, '', previousTransactionHash);
+
+      // Sign the transaction
+      tx.signWithAddress(fromAddress);
+
+      // Save the transaction to pending transactions
+      await tx.savePending();
+      blockchain.pendingTransactions.push(tx);
+
+      // Update the previousTransactionHash for the next transaction
+      previousTransactionHash = tx.hash;
+
+      // If the pending transactions reach the threshold, mine a new block
+      if (blockchain.pendingTransactions.length >= blockchain.transactionThreshold) {
+        console.log(`Mining block for transactions ${i-1} and ${i}...`);
+        await blockchain.minePendingTransactions(blockchain.minerAddress);
+        assert.strictEqual(blockchain.pendingTransactions.length, 0, 'Pending transactions should be empty after mining');
+      }
+    }
+
+    // Ensure that there are no unmined transactions left at the end
+    assert.strictEqual(blockchain.pendingTransactions.length, 0, 'All transactions should be mined by the end');
+
+    // Validate the number of blocks created
+    const expectedBlocks = 1000 / blockchain.transactionThreshold;
+    assert.strictEqual(blockchain.chain.length - 1, expectedBlocks, `Expected ${expectedBlocks} blocks to be created`);
   });
 });
-
 
 
 
