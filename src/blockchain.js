@@ -575,7 +575,7 @@ class Blockchain {
     this.difficulty = 0; // Initial difficulty (for mining)
     this.pendingTransactions = []; // Transactions waiting to be mined
     this.miningReward = 100; // Reward for mining a new block
-    this.transactionThreshold = 2; // Number of transactions required to mine a block
+    this.transactionThreshold = 500; // Number of transactions required to mine a block
     this.minerAddress = "59a8277a36bffda17f9a997e5f7c23"; // Set your miner address here
     this.genesisAddress = "6c7f05cca415fd2073de8ea8853834"; 
     console.log(
