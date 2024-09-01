@@ -16,6 +16,7 @@
     "bs58check": "^4.0.0",
     "crypto": "^1.0.1",
     "debug": "^4.3.5",
+    "decimal.js": "^10.4.3",
     "elliptic": "^6.5.6",
     "flatted": "^3.3.1",
     "jsonwebtoken": "^9.0.2",
@@ -41,3 +42,4 @@
   "author": "",
   "license": "ISC"
 }
+

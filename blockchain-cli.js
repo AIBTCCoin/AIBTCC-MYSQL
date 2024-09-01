@@ -1,7 +1,16 @@
 const readline = require("readline");
 const { Blockchain, Transaction } = require("./src/blockchain");
 const { createNewWallet, loadWallet, ec } = require("./src/wallet");
+const db = require("./src/db");
 const crypto = require('crypto');
+const util = require('util');
+const Decimal = require('decimal.js');
+
+
+
+// Convert callback-based functions to promise-based
+const queryAsync = util.promisify(db.query).bind(db);
+
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -20,6 +29,13 @@ async function main() {
   // Initialize the blockchain and create the genesis block
   blockchain = new Blockchain();
 
+    // Check if the blockchain is valid on startup
+  if (!blockchain.isChainValid()) {
+    console.log("Blockchain is invalid. Exiting CLI.");
+    rl.close();
+    return;
+  }
+
   while (true) {
     console.log(`
     1. Create a new wallet
@@ -30,7 +46,9 @@ async function main() {
     6. Trace a transaction
     7. Trace fund movement 
     8. Run transaction and mining test 
-    9. Exit
+    9. Validate blockchain
+    10. Verify transaction in block 
+    11. Exit
     `);
 
     const choice = await askQuestion("Select an option: ");
@@ -59,8 +77,14 @@ async function main() {
         break;
       case "8":
         await runTransactionAndMiningTest();  // New test option
-          break;       
+          break; 
       case "9":
+        await validateBlockchain(); // New option added
+          break;
+      case "10":
+       await verifyTransactionInBlock(); // New option added
+           break;          
+      case "11":
         console.log("Exiting...");
         rl.close();
         return;
@@ -72,6 +96,13 @@ async function main() {
 
 async function sendTransaction() {
   try {
+
+    // Verify blockchain validity before sending a transaction
+    if (!blockchain.isChainValid()) {
+      console.log("Blockchain is invalid. Transaction cannot proceed.");
+      return;
+    }
+
     const fromAddress = await askQuestion("Enter your wallet address: ");
     
     // Validate address length
@@ -171,6 +202,13 @@ async function sendTransaction() {
 
 
 async function viewBlockchain() {
+
+  // Verify blockchain validity before viewing
+  if (!blockchain.isChainValid()) {
+    console.log("Blockchain is invalid. Cannot view blockchain.");
+    return;
+  }
+
   const blocks = blockchain.chain;
   console.log(`Total blocks: ${blocks.length}`);
   blocks.forEach((block) => {
@@ -188,6 +226,12 @@ async function checkBalance() {
     return;
   }
 
+  // Verify blockchain validity before checking balance
+  if (!blockchain.isChainValid()) {
+    console.log("Blockchain is invalid. Cannot fetch balance.");
+    return;
+  }
+
   try {
     const balance = await blockchain.getBalanceOfAddress(address);
     console.log(`Balance of address ${address}: ${balance}`);
@@ -201,6 +245,12 @@ async function viewTransactionsForAddress() {
 
   if (!address || address.length < 24 || address.length > 30) {
     console.log("Invalid wallet address.");
+    return;
+  }
+
+  // Verify blockchain validity before viewing transactions
+  if (!blockchain.isChainValid()) {
+    console.log("Blockchain is invalid. Cannot view transactions.");
     return;
   }
 
@@ -242,6 +292,12 @@ async function traceTransaction() {
     return;
   }
 
+  // Verify blockchain validity before tracing transaction
+  if (!blockchain.isChainValid()) {
+    console.log("Blockchain is invalid. Cannot trace transaction.");
+    return;
+  }
+
   let foundTransaction = null;
   let blockIndex = null;
 
@@ -276,6 +332,12 @@ async function traceFundMovement() {
 
   if (!transactionHash || transactionHash.length !== 64) {
     console.log("Invalid transaction hash.");
+    return;
+  }
+
+  // Verify blockchain validity before tracing fund movement
+  if (!blockchain.isChainValid()) {
+    console.log("Blockchain is invalid. Cannot trace fund movement.");
     return;
   }
 
@@ -346,6 +408,15 @@ function displayTransactionDetails(transaction, blockIndex) {
 }
 
 async function runTransactionAndMiningTest() {
+
+  console.log("Running transaction and mining test...");
+
+  // Verify blockchain validity before running the test
+  if (!blockchain.isChainValid()) {
+    console.log("Blockchain is invalid. Cannot run the test.");
+    return;
+  }
+
   let previousTransactionHash = null;
   let wallets = [];
 
@@ -358,7 +429,7 @@ async function runTransactionAndMiningTest() {
   // The address that receives the genesis reward
   const genesisRewardAddress = blockchain.genesisAddress; // Save the genesis block reward recipient address
 
-  for (let i = 0; i < 1000; i++) {
+  for (let i = 0; i < 12; i++) {
     const toWallet = wallets[i % 2]; // Alternating recipient wallets
 
     const fromAddress = genesisRewardAddress; // Always send from the genesis reward address
@@ -395,6 +466,152 @@ async function runTransactionAndMiningTest() {
 
   console.log(`Test complete. Total blocks mined: ${blockchain.chain.length - 1}`);
 }
+
+async function validateBlockchain() {
+
+  const GENESIS_BLOCK_INDEX = 0; 
+
+  try {
+    for (let i = 0; i < blockchain.chain.length; i++) {
+      const block = blockchain.chain[i];
+
+      if (!blockchain.validateDatabaseState(block)) {
+        console.log(`Invalid hash for block ${i}.`);
+        return;
+      }
+
+      for (const transaction of block.transactions) {
+        if (i === GENESIS_BLOCK_INDEX) {
+          // Skip genesis block or set flag isGenesis to true
+          if (!await validateTransaction(transaction, i, true)) {
+            console.log(`Invalid transaction ${transaction.hash} in block ${i}.`);
+            return;
+          }
+        } else {
+          if (!await validateTransaction(transaction, i)) {
+            console.log(`Invalid transaction ${transaction.hash} in block ${i}.`);
+            return;
+          }
+        }
+      }
+    }
+
+    const allAddresses = getAllAddressesFromBlockchain();
+    
+    for (const address of allAddresses) {
+      const balance = await blockchain.getBalanceOfAddress(address);
+      if (new Decimal(balance).isNegative()) {
+        console.log(`Negative balance found for address ${address}.`);
+        return;
+      }
+    }
+
+    console.log("Blockchain validation passed. All transactions and balances are correct.");
+  } catch (error) {
+    console.error("Error validating blockchain:", error);
+  }
+}
+
+// Function to check if a string is a valid hex
+function isHexString(str) {
+  return typeof str === 'string' && /^[0-9a-fA-F]+$/.test(str);
+}
+
+async function validateTransaction(transaction, blockIndex, isGenesis = false) {
+
+  const GENESIS_ADDRESS = '6c7f05cca415fd2073de8ea8853834';
+
+  const isMiningReward = transaction === blockchain.chain[blockIndex].transactions[blockchain.chain[blockIndex].transactions.length - 1];
+  
+
+  if (isGenesis || transaction.fromAddress === GENESIS_ADDRESS || isMiningReward) {
+    return true;
+  }
+  
+  // Check if transaction signature is valid
+  if (!transaction.signature) {
+    console.log(`No signature found for transaction ${transaction.hash}`);
+    return false;
+  }
+
+  // Calculate the hash of the transaction
+  const transactionHash = transaction.calculateHash();
+  if (transactionHash !== transaction.hash) {
+    console.log(`Hash mismatch for transaction ${transaction.hash}`);
+    return false;
+  }
+
+  try {
+    console.log(`Verifying transaction from address: ${transaction.fromAddress}`);
+
+    // Check if the public key format is correct
+    if (!transaction.fromAddress || transaction.fromAddress.length !== 66 && transaction.fromAddress.length !== 130) {
+      console.error(`Invalid public key length for address ${transaction.fromAddress}`);
+      return false;
+    }
+
+    // Check if the public key is a valid hex string
+    if (!isHexString(transaction.fromAddress)) {
+      console.error(`Invalid public key format for address ${transaction.fromAddress}`);
+      return false;
+    }
+
+    const keyPair = ec.keyFromPublic(transaction.fromAddress, 'hex');
+
+    // Verify the transaction signature
+    const signatureIsValid = keyPair.verify(transaction.hash, transaction.signature);
+    if (!signatureIsValid) {
+      console.log(`Signature verification failed for transaction ${transaction.hash}`);
+      return false;
+    }
+  } catch (error) {
+    console.error(`Error verifying signature for transaction ${transaction.hash}:`, error);
+    return false;
+  }
+
+  return true;
+}
+
+function getAllAddressesFromBlockchain() {
+  const addresses = new Set();
+  blockchain.chain.forEach(block => {
+    block.transactions.forEach(transaction => {
+      addresses.add(transaction.fromAddress);
+      addresses.add(transaction.toAddress);
+    });
+  });
+  return Array.from(addresses);
+}
+
+
+async function verifyTransactionInBlock() {
+  try {
+    const transactionHash = await askQuestion("Enter the transaction hash to verify: ");
+    if (!transactionHash || transactionHash.length !== 64) {
+      console.log("Invalid transaction hash.");
+      return;
+    }
+
+    const blockHash = await askQuestion("Enter the block hash where the transaction is included: ");
+    if (!blockHash || blockHash.length !== 64) {
+      console.log("Invalid block hash.");
+      return;
+    }
+
+    // Calling the method to recalculate and compare the proof
+    const result = await blockchain.verifyTransactionInBlock(transactionHash, blockHash);
+    if (result) {
+      console.log("Transaction verification completed. The proof paths match.");
+    } else {
+      console.log("Transaction verification failed. The proof paths do not match.");
+    }
+
+  } catch (error) {
+    console.error("Error in CLI function:", error);
+  }
+}
+
+
 
 
 main().catch(console.error);

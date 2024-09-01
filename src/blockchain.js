@@ -3,11 +3,15 @@
 const crypto = require("crypto"); // Required for creating cryptographic hashes
 const EC = require("elliptic").ec; // Required for elliptic curve cryptography
 const db = require("./db"); // Database module for interacting with the database
-const { Node, MerkleTree } = require("./merkleTree"); // Importing MerkleTree and Node classes
+const { Node, MerkleTree, MerkleProofPath } = require("./merkleTree"); // Importing MerkleTree and Node classes
 const { acquireLock, releaseLock } = require("./lock"); // Assume lock.js handles locking mechanisms
 
 const ec = new EC("secp256k1"); // Initialize the elliptic curve for cryptography
 const { createNewWallet, loadWallet } = require('./wallet'); 
+const util = require('util');
+const Decimal = require('decimal.js');
+
+const queryAsync = util.promisify(db.query).bind(db);
 
 class Transaction {
   constructor(
@@ -535,6 +539,8 @@ class Block {
     }
   }
 
+  
+
   async updateAddressBalance(address, amount) {
     return new Promise((resolve, reject) => {
       const query = `
@@ -566,7 +572,6 @@ class Block {
     }
     return true;
   }
-  
 }
 
 class Blockchain {
@@ -575,7 +580,7 @@ class Blockchain {
     this.difficulty = 0; // Initial difficulty (for mining)
     this.pendingTransactions = []; // Transactions waiting to be mined
     this.miningReward = 100; // Reward for mining a new block
-    this.transactionThreshold = 500; // Number of transactions required to mine a block
+    this.transactionThreshold = 2; // Number of transactions required to mine a block
     this.minerAddress = "59a8277a36bffda17f9a997e5f7c23"; // Set your miner address here
     this.genesisAddress = "6c7f05cca415fd2073de8ea8853834"; 
     console.log(
@@ -726,27 +731,32 @@ class Blockchain {
     return this.minerAddress;
   }
 
-  // Get the balance of a specific address
   async getBalanceOfAddress(address) {
     return new Promise((resolve, reject) => {
       const query = `
-        SELECT
-          COALESCE(SUM(CASE WHEN from_address = ? THEN -amount ELSE 0 END), 0) +
-          COALESCE(SUM(CASE WHEN to_address = ? THEN amount ELSE 0 END), 0) AS balance
-        FROM transactions
+        SELECT balance 
+        FROM address_balances 
+        WHERE address = ?
       `;
-      db.query(query, [address, address], (err, results) => {
+  
+      db.query(query, [address], (err, results) => {
         if (err) {
           console.error("Error querying database:", err);
           return reject(err);
         }
-
-        const balance = results[0].balance;
-        console.log(`Balance of address ${address}: ${balance}`);
-        resolve(balance); // Return the balance
+  
+        if (results.length === 0) {
+          console.log(`No balance found for address ${address}. Returning 0.00000000.`);
+          resolve(new Decimal(0).toFixed(8)); // Return 0 if no balance is found
+        } else {
+          const balance = results[0].balance || new Decimal(0);
+          console.log(`Balance of address ${address}: ${balance}`);
+          resolve(new Decimal(balance).toFixed(8)); // Return the balance
+        }
       });
     });
   }
+  
 
   // Check if the blockchain is valid
   isChainValid() {
@@ -776,6 +786,37 @@ class Blockchain {
       }
     }
     return true; // Blockchain is valid
+  }
+
+  /**
+   * Verify if a transaction is in the specified block
+   * @param {string} transactionHash - The hash of the transaction to verify
+   * @param {string} blockHash - The hash of the block where the transaction should be
+   * @returns {boolean} - Returns true if the transaction is in the specified block, otherwise false
+   */
+
+  async verifyTransactionInBlock(transactionHash, blockHash) {
+    try {
+      const block = this.chain.find(b => b.hash === blockHash);
+      if (!block) {
+        console.log("Block not found in local blockchain.");
+        return false;
+      }
+
+      const merkleTree = new MerkleTree(block.transactions.map(tx => tx.hash));
+      const proof = await MerkleProofPath.getProofPath(transactionHash);
+
+      if (proof) {
+        const root = merkleTree.getRootHash();
+        return MerkleTree.verifyProof(transactionHash, proof, root);
+      } else {
+        console.log("Proof not found in the database.");
+        return false;
+      }
+    } catch (error) {
+      console.error("Error verifying transaction:", error);
+      return false;
+    }
   }
 
   // Load the blockchain from the database
@@ -831,18 +872,58 @@ class Blockchain {
 
     // Calculate expected balances
     const calculatedBalances = {};
+    const balanceDiscrepancies = {};
+
+
     for (const tx of transactions) {
-      if (!calculatedBalances[tx.fromAddress]) calculatedBalances[tx.fromAddress] = 0;
-      if (!calculatedBalances[tx.toAddress]) calculatedBalances[tx.toAddress] = 0;
-      calculatedBalances[tx.fromAddress] -= tx.amount;
-      calculatedBalances[tx.toAddress] += tx.amount;
+      if (!calculatedBalances[tx.fromAddress]) calculatedBalances[tx.fromAddress] = new Decimal(0);
+      if (!calculatedBalances[tx.toAddress]) calculatedBalances[tx.toAddress] = new Decimal(0);
+
+      calculatedBalances[tx.fromAddress] = calculatedBalances[tx.fromAddress].minus(tx.amount);
+      calculatedBalances[tx.toAddress] = calculatedBalances[tx.toAddress].plus(tx.amount);
+
+      console.log(`Transaction: From ${tx.fromAddress}, To ${tx.toAddress}, Amount ${tx.amount}`);
     }
 
     // Compare with database balances
     for (const [address, balance] of Object.entries(calculatedBalances)) {
+      
+      // Special handling for "null" address
+      if (address === "null") {
+        const nullAddressBalance = await this.getBalanceOfAddress("null");
+        if (new Decimal(nullAddressBalance).toFixed(8) !== "0.00000000") {
+          console.error(`Balance mismatch for address null: expected 0.00000000, found ${nullAddressBalance}`);
+          return false;
+        }
+        continue; // Skip the "null" address in the general balance check
+      }
+
       const dbBalance = await this.getBalanceOfAddress(address);
-      if (dbBalance !== balance) {
-        console.error(`Balance mismatch for address ${address}: expected ${balance}, found ${dbBalance}`);
+      console.log(`Expected balance for address ${address}: ${balance.toFixed(8)}`);
+      console.log(`Database balance for address ${address}: ${new Decimal(dbBalance).toFixed(8)}`);
+
+      if (!balance.equals(new Decimal(dbBalance))) {
+        console.error(`Balance mismatch for address ${address}: expected ${balance.toFixed(8)}, found ${dbBalance}`);
+
+        // Fetch transactions from blockchain to identify the cause of discrepancy
+        const discrepancyTransactions = transactions.filter(
+          (tx) => tx.fromAddress === address || tx.toAddress === address
+        );
+
+        console.log(`Discrepancy caused by transactions involving address ${address}:`);
+
+        discrepancyTransactions.forEach((tx) => {
+          console.log(`
+            Transaction found in Block ${tx.blockIndex}:
+            From: ${tx.fromAddress}
+            To: ${tx.toAddress}
+            Amount: ${tx.amount}
+            Timestamp: ${new Date(tx.timestamp).toLocaleString()}
+            Hash: ${tx.hash}
+            Origin Transaction Hash: ${tx.originTransactionHash}
+          `);
+        });
+  
         return false;
       }
     }
@@ -866,7 +947,6 @@ class Blockchain {
       });
     });
   }
-
 }
 
 // Check pending transactions

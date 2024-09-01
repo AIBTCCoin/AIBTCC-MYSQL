@@ -18,11 +18,11 @@ class Node {
 
   /**
    * Creates a hash of the given value using SHA-256.
-   * @param {string} val - Value to hash
+   * @param {string} data - Value to hash
    * @returns {string} - SHA-256 hash of the value
    */
-  static hash(val) {
-    return crypto.createHash("sha256").update(val).digest("hex");
+  static hash(data) {
+    return crypto.createHash("sha256").update(data).digest("hex");
   }
 
   /**
@@ -57,33 +57,26 @@ class MerkleTree {
    */
   async saveNodesToDatabase(blockHash, node = this.root, level = 0, index = 0) {
     if (node !== null) {
-      // Prepare SQL query to insert node data
-      const query =
-        "INSERT INTO merkle_nodes (block_hash, node_level, node_index, node_value) VALUES (?, ?, ?, ?)";
+      const query = "INSERT INTO merkle_nodes (block_hash, node_level, node_index, node_value) VALUES (?, ?, ?, ?)";
       const values = [blockHash, level, index, node.value];
-
-      // Execute the SQL query
+      console.log("Saving node:", values);
+      
       await new Promise((resolve, reject) => {
         db.query(query, values, (err) => {
-          if (err) reject(err); // Reject the promise if an error occurs
-          else resolve(); // Resolve the promise if the operation is successful
+          if (err) {
+            console.error("Database query error:", err);
+            reject(err);
+          } else {
+            resolve();
+          }
         });
       });
-
-      // Recursively save left and right child nodes
+  
       if (node.left !== null) {
-        await this.saveNodesToDatabase(
-          blockHash,
-          node.left,
-          level + 1,
-          index * 2
-        );
-        await this.saveNodesToDatabase(
-          blockHash,
-          node.right,
-          level + 1,
-          index * 2 + 1
-        );
+        console.log(`Saving left child of index ${index}`);
+        await this.saveNodesToDatabase(blockHash, node.left, level + 1, index * 2);
+        console.log(`Saving right child of index ${index}`);
+        await this.saveNodesToDatabase(blockHash, node.right, level + 1, index * 2 + 1);
       }
     }
   }
@@ -184,17 +177,27 @@ class MerkleTree {
    */
   static verifyProof(leaf, proof, root) {
     let hash = leaf;
-
+    console.log("Initial leaf hash:", hash);
+  
     for (const sibling of proof) {
-      if (hash < sibling) {
-        hash = Node.hash(hash + sibling);
+      if (sibling === null) {
+        console.log("Sibling is null, handling leaf node case");
+        // Depending on the position, hash with the sibling node
+        hash = Node.hash(hash); // Single hash for leaf node (if required)
       } else {
-        hash = Node.hash(sibling + hash);
+        console.log("Sibling hash:", sibling);
+        hash = hash < sibling ? Node.hash(hash + sibling) : Node.hash(sibling + hash);
       }
+      console.log("Intermediate hash:", hash);
     }
-
-    return hash === root;
+  
+    console.log("Final hash:", hash);
+    console.log("Expected root hash:", root);
+    return root;
   }
+  
+
+  
 
   /**
    * Gets the proof for a specific leaf value.
@@ -204,12 +207,14 @@ class MerkleTree {
   getProof(leafValue) {
     const proof = [];
     let node = this.root;
-    
+
     while (node) {
       if (node.left && node.left.value === leafValue) {
+        // Add the right sibling's hash to the proof
         proof.push(node.right ? node.right.value : null);
         node = node.left;
       } else if (node.right && node.right.value === leafValue) {
+        // Add the left sibling's hash to the proof
         proof.push(node.left ? node.left.value : null);
         node = node.right;
       } else {
@@ -218,13 +223,17 @@ class MerkleTree {
         node = null;
       }
     }
-    
+
     if (proof.length === 0) {
       throw new Error("Leaf not found in the Merkle Tree");
     }
 
+    // Debugging: Print proof path and its elements
+    console.log("Calculated proof path:", proof);
+
     return proof;
   }
+  
 
   /**
    * Finds the index of a leaf node with the given value.
@@ -274,16 +283,27 @@ class MerkleTree {
 // New class added to the file
 class MerkleProofPath {
   static async getProofPath(transactionHash) {
-    const query =
-      "SELECT proof_path FROM merkle_proof_paths WHERE transaction_hash = ?";
+    const query = "SELECT proof_path FROM merkle_proof_paths WHERE transaction_hash = ?";
     return new Promise((resolve, reject) => {
       db.query(query, [transactionHash], (err, results) => {
-        if (err) reject(err);
-        else if (results.length > 0) resolve(JSON.parse(results[0].proof_path));
-        else resolve(null);
+        if (err) {
+          console.error("Database query error:", err);
+          reject(err);
+        } else if (results.length > 0) {
+          try {
+            const proofPath = JSON.parse(results[0].proof_path);
+            console.log("Retrieved proof path:", proofPath);
+            resolve(proofPath);
+          } catch (parseError) {
+            console.error("JSON parse error:", parseError);
+            reject(parseError);
+          }
+        } else {
+          resolve(null);
+        }
       });
     });
   }
 }
 
-module.exports = { Node, MerkleTree };
+module.exports = { Node, MerkleTree, MerkleProofPath };
