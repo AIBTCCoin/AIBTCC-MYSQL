@@ -59,7 +59,7 @@ class MerkleTree {
     if (node !== null) {
       const query = "INSERT INTO merkle_nodes (block_hash, node_level, node_index, node_value) VALUES (?, ?, ?, ?)";
       const values = [blockHash, level, index, node.value];
-      console.log("Saving node:", values);
+      //console.log("Saving node:", values);
       
       await new Promise((resolve, reject) => {
         db.query(query, values, (err) => {
@@ -73,9 +73,9 @@ class MerkleTree {
       });
   
       if (node.left !== null) {
-        console.log(`Saving left child of index ${index}`);
+        //console.log(`Saving left child of index ${index}`);
         await this.saveNodesToDatabase(blockHash, node.left, level + 1, index * 2);
-        console.log(`Saving right child of index ${index}`);
+        //console.log(`Saving right child of index ${index}`);
         await this.saveNodesToDatabase(blockHash, node.right, level + 1, index * 2 + 1);
       }
     }
@@ -152,10 +152,10 @@ class MerkleTree {
     if (node !== null) {
       if (node.left !== null) {
         this.printTreeRec(node.left, level + 1); // Print left subtree
-        console.log(" ".repeat(level * 2) + node.value); // Print current node value
+        //console.log(" ".repeat(level * 2) + node.value); // Print current node value
         this.printTreeRec(node.right, level + 1); // Print right subtree
       } else {
-        console.log(" ".repeat(level * 2) + node.value); // Print leaf node value
+        //console.log(" ".repeat(level * 2) + node.value); // Print leaf node value
       }
     }
   }
@@ -177,24 +177,27 @@ class MerkleTree {
    */
   static verifyProof(leaf, proof, root) {
     let hash = leaf;
-    console.log("Initial leaf hash:", hash);
-  
+    const proofHashes = [];
+    //console.log("Initial leaf hash:", hash);
+
     for (const sibling of proof) {
-      if (sibling === null) {
-        console.log("Sibling is null, handling leaf node case");
-        // Depending on the position, hash with the sibling node
-        hash = Node.hash(hash); // Single hash for leaf node (if required)
-      } else {
-        console.log("Sibling hash:", sibling);
-        hash = hash < sibling ? Node.hash(hash + sibling) : Node.hash(sibling + hash);
-      }
-      console.log("Intermediate hash:", hash);
+        if (sibling === null) {
+            //console.log("Sibling is null, handling leaf node case");
+            // Assuming sibling is null for a single hash scenario
+            hash = Node.hash(hash); // Only for leaf nodes
+        } else {
+            //console.log("Sibling hash:", sibling);
+            // Determine position: if sibling is on the left or right
+            hash = Node.hash(hash + sibling); 
+        }
+        proofHashes.push(hash);
+        //console.log("Intermediate hash:", hash);
     }
-  
-    console.log("Final hash:", hash);
-    console.log("Expected root hash:", root);
-    return root;
+
+    //console.log("Expected root hash:", root);
+    return proofHashes; 
   }
+
   
 
   
@@ -227,9 +230,6 @@ class MerkleTree {
     if (proof.length === 0) {
       throw new Error("Leaf not found in the Merkle Tree");
     }
-
-    // Debugging: Print proof path and its elements
-    console.log("Calculated proof path:", proof);
 
     return proof;
   }
@@ -284,22 +284,29 @@ class MerkleTree {
 class MerkleProofPath {
   static async getProofPath(transactionHash) {
     const query = "SELECT proof_path FROM merkle_proof_paths WHERE transaction_hash = ?";
+    console.log("Retrieving proof path for transaction:", transactionHash);
+
     return new Promise((resolve, reject) => {
       db.query(query, [transactionHash], (err, results) => {
         if (err) {
           console.error("Database query error:", err);
-          reject(err);
-        } else if (results.length > 0) {
-          try {
-            const proofPath = JSON.parse(results[0].proof_path);
-            console.log("Retrieved proof path:", proofPath);
-            resolve(proofPath);
-          } catch (parseError) {
-            console.error("JSON parse error:", parseError);
-            reject(parseError);
-          }
-        } else {
-          resolve(null);
+          return reject(err);
+        }
+
+        if (results.length === 0) {
+          // No proof path found for the given transaction hash
+          console.log("No proof path found for transaction:", transactionHash);
+          return resolve(null);
+        }
+
+        // Assuming only one result is returned per transaction_hash
+        try {
+          const proofPath = JSON.parse(results[0].proof_path);
+          console.log("Veryfied proof path:", proofPath);
+          resolve(proofPath);
+        } catch (parseError) {
+          console.error("JSON parse error:", parseError);
+          reject(parseError);
         }
       });
     });
@@ -307,3 +314,4 @@ class MerkleProofPath {
 }
 
 module.exports = { Node, MerkleTree, MerkleProofPath };
+

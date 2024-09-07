@@ -1,6 +1,7 @@
 const readline = require("readline");
 const { Blockchain, Transaction } = require("./src/blockchain");
 const { createNewWallet, loadWallet, ec } = require("./src/wallet");
+const { MerkleTree, MerkleProofPath } = require("./src/merkleTree");
 const db = require("./src/db");
 const crypto = require('crypto');
 const util = require('util');
@@ -36,6 +37,9 @@ async function main() {
     return;
   }
 
+  // Start automatic mining using the interval defined in the Blockchain class
+  blockchain.startTimeBasedMining(blockchain.miningIntervalInSeconds);
+
   while (true) {
     console.log(`
     1. Create a new wallet
@@ -47,7 +51,7 @@ async function main() {
     7. Trace fund movement 
     8. Run transaction and mining test 
     9. Validate blockchain
-    10. Verify transaction in block 
+    10. Verify Merkle proof by transaction hash 
     11. Exit
     `);
 
@@ -82,8 +86,8 @@ async function main() {
         await validateBlockchain(); // New option added
           break;
       case "10":
-       await verifyTransactionInBlock(); // New option added
-           break;          
+        await verifyMerkleProofByTransactionHash(); // New function to verify Merkle proof
+            break;               
       case "11":
         console.log("Exiting...");
         rl.close();
@@ -162,38 +166,25 @@ async function sendTransaction() {
 
     const latestTransaction = await Transaction.getLatestTransactionForAddress(fromAddress);
 
-    console.log("Latest Transaction:", latestTransaction);
+   
     const originTransactionHash = latestTransaction ? latestTransaction.hash : null;
-    console.log("Origin Transaction Hash:", originTransactionHash);
+   
 
     const tx = new Transaction(fromAddress, toAddress, amount,  Date.now(), null, "", originTransactionHash);
     
     // Sign the transaction with the provided private key
-    console.log("Transaction before signing:", tx);
+    
     tx.signWithAddress(fromAddress); // Ensure the address is used correctly
-    console.log("Transaction after signing:", tx);
+    
 
     await tx.savePending();
-    console.log("Transaction saved as pending successfully.");
+    
 
     // Manually update blockchain pending transactions for accurate count
     blockchain.pendingTransactions.push(tx);
 
     const pendingTransactions = await Transaction.loadPendingTransactions();
-    console.log("Pending transactions count:", pendingTransactions.length);
-
-    // Automatically mine if transaction threshold is reached
-    if (pendingTransactions.length >= blockchain.transactionThreshold) {
-      console.log(
-        `Transaction threshold of ${blockchain.transactionThreshold} reached. Mining a new block...`
-      );
-      await blockchain.minePendingTransactions(blockchain.minerAddress);
-      console.log("Mining complete.");
-    } else {
-      console.log(
-        `Threshold not reached. Pending count: ${pendingTransactions.length}`
-      );
-    }
+    
   } catch (error) {
     console.error("Error in sendTransaction:", error);
   }
@@ -449,22 +440,8 @@ async function runTransactionAndMiningTest() {
 
     // Update the previousTransactionHash for the next transaction
     previousTransactionHash = tx.hash;
-
-    // If the pending transactions reach the threshold, mine a new block
-    if (blockchain.pendingTransactions.length >= blockchain.transactionThreshold) {
-      console.log(`Mining block for transactions ${i-1} and ${i}...`);
-      await blockchain.minePendingTransactions(blockchain.minerAddress);
-      console.log(`Block mined. Current chain length: ${blockchain.chain.length}`);
-    }
   }
 
-  // Ensure that there are no unmined transactions left at the end
-  if (blockchain.pendingTransactions.length > 0) {
-    console.log('Final mining to clear remaining transactions...');
-    await blockchain.minePendingTransactions(blockchain.minerAddress);
-  }
-
-  console.log(`Test complete. Total blocks mined: ${blockchain.chain.length - 1}`);
 }
 
 async function validateBlockchain() {
@@ -506,7 +483,7 @@ async function validateBlockchain() {
       }
     }
 
-    console.log("Blockchain validation passed. All transactions and balances are correct.");
+    
   } catch (error) {
     console.error("Error validating blockchain:", error);
   }
@@ -584,32 +561,67 @@ function getAllAddressesFromBlockchain() {
 }
 
 
-async function verifyTransactionInBlock() {
+async function verifyMerkleProofByTransactionHash() {
+  const transactionHash = await askQuestion("Enter the transaction hash: ");
+
   try {
-    const transactionHash = await askQuestion("Enter the transaction hash to verify: ");
-    if (!transactionHash || transactionHash.length !== 64) {
-      console.log("Invalid transaction hash.");
+    // Retrieve the block hash associated with the transaction hash
+    const blockHashQuery = "SELECT block_hash FROM transactions WHERE hash = ?";
+    const result = await queryAsync(blockHashQuery, [transactionHash]);
+
+    if (result.length === 0) {
+      console.log("Transaction not found in the blockchain.");
       return;
     }
 
-    const blockHash = await askQuestion("Enter the block hash where the transaction is included: ");
-    if (!blockHash || blockHash.length !== 64) {
-      console.log("Invalid block hash.");
+    const blockHash = result[0].block_hash;
+    console.log(`Block hash containing the transaction: ${blockHash}`);
+
+    // Retrieve the Merkle proof path
+    const proofPath = await MerkleProofPath.getProofPath(transactionHash);
+
+    if (!proofPath) {
+      console.log("No proof path found for the given transaction.");
       return;
     }
 
-    // Calling the method to recalculate and compare the proof
-    const result = await blockchain.verifyTransactionInBlock(transactionHash, blockHash);
-    if (result) {
-      console.log("Transaction verification completed. The proof paths match.");
+    // Retrieve the Merkle root from the block
+    const blockQuery = "SELECT merkle_root FROM blocks WHERE hash = ?";
+    const blockResult = await queryAsync(blockQuery, [blockHash]);
+
+    if (blockResult.length === 0) {
+      console.log("Block not found in the blockchain.");
+      return;
+    }
+
+    const merkleRoot = blockResult[0].merkle_root;
+
+    // Use the verifyProof method to get intermediate hashes and log details
+    const proofHashes = MerkleTree.verifyProof(transactionHash, proofPath, merkleRoot);
+
+    // Log the details as in the verifyProof method
+    console.log("Initial leaf hash:", transactionHash);
+    proofPath.forEach((sibling, index) => {
+      console.log("Sibling hash:", sibling);
+      if (index < proofHashes.length) {
+        console.log("Intermediate hash:", proofHashes[index]);
+      }
+    });
+    console.log("Expected root hash:", merkleRoot);
+
+    // Check if the proof is valid
+    const isValid = merkleRoot;
+
+    if (isValid) {
+      console.log("Merkle proof is valid.");
     } else {
-      console.log("Transaction verification failed. The proof paths do not match.");
+      console.log("Merkle proof is invalid.");
     }
-
-  } catch (error) {
-    console.error("Error in CLI function:", error);
+  } catch (err) {
+    console.error("Error verifying Merkle proof:", err);
   }
 }
+
 
 
 

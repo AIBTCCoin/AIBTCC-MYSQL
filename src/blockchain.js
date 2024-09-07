@@ -49,34 +49,18 @@ class Transaction {
       
       // Sign the transaction
       const hashTx = this.calculateHash();
-      console.log(`Signing transaction with hash: ${hashTx}`);
+      //console.log(`Signing transaction with hash: ${hashTx}`);
       const signature = keyPair.sign(hashTx, 'hex');
-      console.log(`Generated signature: ${signature.toDER('hex')}`);
       this.signature = signature.toDER('hex');
     } catch (error) {
       throw new Error('Failed to sign with address: ' + error.message);
     }
   }
   
-/*
-  // Sign the transaction using the provided key pair
-  sign(keyPair) {
-    const hashTx = this.calculateHash(); // Get the hash of the transaction
-
-    // Allow signing if no sender address is specified (e.g., for reward transactions)
-    if (this.fromAddress && keyPair.getPublic("hex") !== this.fromAddress) {
-      throw new Error("You cannot sign transactions for other wallets!");
-    }
-
-    const sig = keyPair.sign(hashTx, "hex"); // Sign the transaction hash
-    this.signature = sig.toDER("hex"); // Set the signature
-  }
-*/
   // Validate the transaction
   isValid() {
     const hashToVerify = this.calculateHash(); // Calculate the hash to verify
-    console.log(`Hash to verify: ${hashToVerify}`);
-    console.log(`Transaction signature: ${this.signature}`);
+    
     if (this.fromAddress === null) return true; // Allow transactions with no sender (e.g., mining reward)
     if (!this.signature || this.signature.length === 0) {
       throw new Error("Transaction signature is missing or invalid!");
@@ -84,7 +68,6 @@ class Transaction {
     try {
       const key = ec.keyFromPublic(this.fromAddress, "hex"); // Load the public key from the address
       const isValid = key.verify(hashToVerify, this.signature);
-      console.log(`Signature validity: ${isValid}`);
       return isValid;
     } catch (error) {
       throw new Error("Transaction signature is invalid!");
@@ -95,7 +78,6 @@ class Transaction {
   save() {
     this.verifyTransaction();
 
-    console.log('Saving transaction with originTransactionHash:', this.originTransactionHash);
     return new Promise((resolve, reject) => {
       const query =
         "INSERT INTO transactions (hash, from_address, to_address, amount, origin_transaction_hash, timestamp, signature, block_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
@@ -179,8 +161,7 @@ class Transaction {
       this.signature,
       this.originTransactionHash,
     ];
-
-    console.log(`Saving transaction with hash: ${values[0]}`);
+/*
     console.log(
       `Data to be saved: ${JSON.stringify({
         hash: values[0],
@@ -192,6 +173,7 @@ class Transaction {
         originTransactionHash: values[6],
       })}`
     );
+    */
 
     return new Promise((resolve, reject) => {
       db.query(query, values, (err) => {
@@ -199,7 +181,6 @@ class Transaction {
           console.error("Error saving transaction:", err);
           reject(err);
         } else {
-          console.log("Transaction saved successfully");
           resolve();
         }
       });
@@ -209,7 +190,6 @@ class Transaction {
 
   // Load all pending transactions
   static async loadPendingTransactions() {
-    console.log("Loading pending transactions from the database...");
     return new Promise((resolve, reject) => {
       const query = "SELECT * FROM pending_transactions";
 
@@ -219,7 +199,7 @@ class Transaction {
           return reject(err);
         }
 
-        console.log(`Retrieved ${results.length} pending transactions`);
+       // console.log(`Retrieved ${results.length} pending transactions`);
 
         const transactions = results.map((txData) => {
           const tx = new Transaction(
@@ -232,7 +212,7 @@ class Transaction {
           tx.hash = txData.hash;
           return tx;
         });
-
+/*
         console.log(
           "Loaded transactions:",
           transactions.map((tx) => ({
@@ -243,7 +223,7 @@ class Transaction {
             timestamp: tx.timestamp,
             signature: tx.signature,
           }))
-        );
+        );*/
 
         resolve(transactions);
       });
@@ -267,7 +247,6 @@ class Transaction {
           tx.hash = txData.hash; // Ensure hash is set here
           return tx;
         });
-        console.log("Pending Transactions:", transactions);
         resolve(transactions);
       });
     });
@@ -306,7 +285,7 @@ class Transaction {
         );
         tx.hash = txData.hash;
   
-        console.log("Loaded latest transaction:", tx);
+        
         resolve(tx);
       });
     });
@@ -446,7 +425,8 @@ class Block {
           // Store Merkle proofs
           for (const tx of this.transactions) {
             const proof = merkleTree.getProof(tx.hash);
-            await this.saveMerkleProof(tx.hash, proof);
+            const proofHashes = MerkleTree.verifyProof(tx.hash, proof, this.merkleRoot);
+            await this.saveMerkleProof(tx.hash, proofHashes);
           }
 
           resolve(results);
@@ -457,14 +437,18 @@ class Block {
     });
   }
 
-  async saveMerkleProof(transactionHash, proof) {
+  async saveMerkleProof(transactionHash, hash) {
     const query =
       "INSERT INTO merkle_proof_paths (block_hash, transaction_hash, proof_path) VALUES (?, ?, ?)";
-    const values = [this.hash, transactionHash, JSON.stringify(proof)];
+    const values = [this.hash, transactionHash, JSON.stringify(hash)];
     return new Promise((resolve, reject) => {
       db.query(query, values, (err) => {
-        if (err) reject(err);
-        else resolve();
+        if (err) {
+          console.error(`Error saving proof path for transaction ${transactionHash}:`, err);
+          reject(err);
+        } else {
+          resolve();
+        }
       });
     });
   }
@@ -580,13 +564,15 @@ class Blockchain {
     this.difficulty = 0; // Initial difficulty (for mining)
     this.pendingTransactions = []; // Transactions waiting to be mined
     this.miningReward = 100; // Reward for mining a new block
-    this.transactionThreshold = 2; // Number of transactions required to mine a block
+   // this.transactionThreshold = 2; // Number of transactions required to mine a block
     this.minerAddress = "59a8277a36bffda17f9a997e5f7c23"; // Set your miner address here
     this.genesisAddress = "6c7f05cca415fd2073de8ea8853834"; 
-    console.log(
+    this.miningIntervalInSeconds = 30; // Define mining interval in seconds
+
+   /* console.log(
       "Blockchain initialized with transaction threshold:",
       this.transactionThreshold
-    );
+    );*/
 
     // Initialize the blockchain with the genesis block
     this.initializeGenesisBlock();
@@ -595,7 +581,7 @@ class Blockchain {
   // Create the first block of the blockchain (genesis block)
   initializeGenesisBlock() {
     console.log("Creating genesis block...");
-    this.createGenesisBlockWithReward("6c7f05cca415fd2073de8ea8853834", 1000000); // Adjust address and reward as needed
+    this.createGenesisBlockWithReward(this.genesisAddress, 1000000); // Adjust address and reward as needed
   }
 
   // Create the genesis block with a reward transaction
@@ -630,6 +616,20 @@ class Blockchain {
     return this.chain[this.chain.length - 1];
   }
 
+  // Start the time-based mining process
+  startTimeBasedMining(intervalInSeconds) {
+    setInterval(async () => {
+      //console.log("Checking for pending transactions to mine...");
+
+      if (this.pendingTransactions.length > 0) {
+        console.log(`Found ${this.pendingTransactions.length} pending transactions.`);
+        await this.minePendingTransactions(this.getMinerAddress());
+      } else {
+        //console.log("No pending transactions found. Skipping mining.");
+      }
+    }, intervalInSeconds * 1000); // Convert seconds to milliseconds
+  }
+
 
   // Mine pending transactions and add a new block to the blockchain
   async minePendingTransactions(miningRewardAddress) {
@@ -643,18 +643,12 @@ class Blockchain {
     }
 
     try {
-      // Continue mining as long as there are enough pending transactions
-      while (this.pendingTransactions.length >= this.transactionThreshold) {
+      if (this.pendingTransactions.length > 0) {
         console.log("Starting to mine a new block...");
-        const blockTransactions = [];
+        const blockTransactions = [...this.pendingTransactions];
 
-        // Collect transactions up to the threshold for the current block
-        while (
-          blockTransactions.length < this.transactionThreshold &&
-          this.pendingTransactions.length > 0
-        ) {
-          blockTransactions.push(this.pendingTransactions.shift());
-        }
+        // Clear pending transactions from in-memory array
+        this.pendingTransactions = [];
 
         // Conditionally add reward transaction if the mining reward address is not null
         if (miningRewardAddress) {
@@ -681,44 +675,37 @@ class Blockchain {
         const previousBlock = this.getLatestBlock();
         const expectedOriginTransactionHash = previousBlock.calculateLastOriginTransactionHash();
 
-        console.log(`Previous block's originTransactionHash: ${expectedOriginTransactionHash}`);
-
         // Check if the previous block’s originTransactionHash is correct
         if (previousBlock.originTransactionHash !== expectedOriginTransactionHash) {
           throw new Error('Previous block has an invalid origin transaction hash');
         } else {
-          console.log('Previous blocks origin transaction hash verified successfully.');
         }
 
         block.mineBlock(this.difficulty);
 
         // Log details of the mined block
-        console.log(`Mined block with hash: ${block.hash}`);
+        /*console.log(`Mined block with hash: ${block.hash}`);
         console.log(
           `Transactions in block ${block.index}: ${JSON.stringify(
             block.transactions,
             null,
             2
           )}`
-        );
+        );*/
 
         // Add the new block to the blockchain
         this.chain.push(block);
 
         // Save the block to the database
         await block.save();
-        console.log(`Block ${block.index} saved to the database.`);
+        
 
         // Clear pending transactions from the database (if needed) and in-memory array
         await this.clearPendingTransactions();
-        console.log("Cleared pending transactions from the database.");
       }
 
       // Handle the case where pending transactions are left over after mining
-      console.log(
-        "Pending transactions after mining: ",
-        JSON.stringify(this.pendingTransactions, null, 2)
-      );
+      
     } catch (error) {
       console.error("Error during mining process:", error);
     } finally {
@@ -746,11 +733,10 @@ class Blockchain {
         }
   
         if (results.length === 0) {
-          console.log(`No balance found for address ${address}. Returning 0.00000000.`);
           resolve(new Decimal(0).toFixed(8)); // Return 0 if no balance is found
         } else {
           const balance = results[0].balance || new Decimal(0);
-          console.log(`Balance of address ${address}: ${balance}`);
+          //console.log(`Balance of address ${address}: ${balance}`);
           resolve(new Decimal(balance).toFixed(8)); // Return the balance
         }
       });
@@ -882,7 +868,6 @@ class Blockchain {
       calculatedBalances[tx.fromAddress] = calculatedBalances[tx.fromAddress].minus(tx.amount);
       calculatedBalances[tx.toAddress] = calculatedBalances[tx.toAddress].plus(tx.amount);
 
-      console.log(`Transaction: From ${tx.fromAddress}, To ${tx.toAddress}, Amount ${tx.amount}`);
     }
 
     // Compare with database balances
@@ -892,15 +877,14 @@ class Blockchain {
       if (address === "null") {
         const nullAddressBalance = await this.getBalanceOfAddress("null");
         if (new Decimal(nullAddressBalance).toFixed(8) !== "0.00000000") {
-          console.error(`Balance mismatch for address null: expected 0.00000000, found ${nullAddressBalance}`);
+          
           return false;
         }
         continue; // Skip the "null" address in the general balance check
       }
 
       const dbBalance = await this.getBalanceOfAddress(address);
-      console.log(`Expected balance for address ${address}: ${balance.toFixed(8)}`);
-      console.log(`Database balance for address ${address}: ${new Decimal(dbBalance).toFixed(8)}`);
+      
 
       if (!balance.equals(new Decimal(dbBalance))) {
         console.error(`Balance mismatch for address ${address}: expected ${balance.toFixed(8)}, found ${dbBalance}`);
