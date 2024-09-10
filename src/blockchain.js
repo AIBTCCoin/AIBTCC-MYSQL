@@ -683,6 +683,9 @@ class Blockchain {
 
         block.mineBlock(this.difficulty);
 
+        console.log(`Mined block succesfully with index: ${block.index}`);
+        console.log(`Number of transactions mined in block ${block.index}: ${block.transactions.length}`);
+
         // Log details of the mined block
         /*console.log(`Mined block with hash: ${block.hash}`);
         console.log(

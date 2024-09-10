@@ -49,7 +49,7 @@ async function main() {
     5. View transactions for address
     6. Trace a transaction
     7. Trace fund movement 
-    8. Run transaction and mining test 
+    8. Run transaction test 
     9. Validate blockchain
     10. Verify Merkle proof by transaction hash 
     11. Exit
@@ -178,7 +178,7 @@ async function sendTransaction() {
     
 
     await tx.savePending();
-    
+    console.log("Transaction submitted successfully.");
 
     // Manually update blockchain pending transactions for accurate count
     blockchain.pendingTransactions.push(tx);
@@ -400,7 +400,7 @@ function displayTransactionDetails(transaction, blockIndex) {
 
 async function runTransactionAndMiningTest() {
 
-  console.log("Running transaction and mining test...");
+  console.log("Running transaction test...");
 
   // Verify blockchain validity before running the test
   if (!blockchain.isChainValid()) {
@@ -410,6 +410,7 @@ async function runTransactionAndMiningTest() {
 
   let previousTransactionHash = null;
   let wallets = [];
+  let transactionCount = 0;
 
   // Create two wallets to use for transactions
   for (let i = 0; i < 2; i++) {
@@ -440,13 +441,15 @@ async function runTransactionAndMiningTest() {
 
     // Update the previousTransactionHash for the next transaction
     previousTransactionHash = tx.hash;
+    transactionCount++;
   }
-
+  console.log(`Test complete. Total transactions done: ${transactionCount}`);
 }
 
 async function validateBlockchain() {
-
-  const GENESIS_BLOCK_INDEX = 0; 
+  const GENESIS_BLOCK_INDEX = 0;
+  let validatedBlocksCount = 0; // Initialize a counter for validated blocks
+  let validatedTransactionsCount = 0; // Initialize a counter for validated transactions
 
   try {
     for (let i = 0; i < blockchain.chain.length; i++) {
@@ -458,19 +461,18 @@ async function validateBlockchain() {
       }
 
       for (const transaction of block.transactions) {
-        if (i === GENESIS_BLOCK_INDEX) {
-          // Skip genesis block or set flag isGenesis to true
-          if (!await validateTransaction(transaction, i, true)) {
-            console.log(`Invalid transaction ${transaction.hash} in block ${i}.`);
-            return;
-          }
-        } else {
-          if (!await validateTransaction(transaction, i)) {
-            console.log(`Invalid transaction ${transaction.hash} in block ${i}.`);
-            return;
-          }
+        const isGenesisBlock = i === GENESIS_BLOCK_INDEX;
+        const isValid = await validateTransaction(transaction, i, isGenesisBlock);
+        
+        if (!isValid) {
+          console.log(`Invalid transaction ${transaction.hash} in block ${i}.`);
+          return;
         }
+
+        validatedTransactionsCount++; // Increment the validated transactions count
       }
+
+      validatedBlocksCount++; // Increment the validated blocks count
     }
 
     const allAddresses = getAllAddressesFromBlockchain();
@@ -483,7 +485,9 @@ async function validateBlockchain() {
       }
     }
 
-    
+    console.log("Blockchain validation passed. All transactions and balances are correct.");
+    console.log(`Total blocks verified: ${validatedBlocksCount}`);
+    console.log(`Total transactions verified: ${validatedTransactionsCount}`);
   } catch (error) {
     console.error("Error validating blockchain:", error);
   }
