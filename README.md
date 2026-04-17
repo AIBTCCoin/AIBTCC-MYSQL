@@ -7,6 +7,7 @@ Please send us your link about your work on AI. Then we will make judgement on y
 Please remember to send us a copy of your work to aibtc.coin@gmail.com also. You still have copyight about your work, but you give us permit to share it on our Github and youtube channel. 
 
 Youtube channel: https://youtube.com/@anders-w3e?si=CzDER-xfddQ0yjvZ
+
 Github channel:  https://github.com/AIBTCCoin
 
 Thanks for your contributions!
