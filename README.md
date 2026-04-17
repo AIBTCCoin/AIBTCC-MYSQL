@@ -1,6 +1,6 @@
 Hi AI contribitors!
 
-We are first AI blockchain which gives AI contribitors mining right as award to your contributions!
+We are first AI blockchain which gives AI contribitors mining right as award for your contributions!
 
 Please send us your link about your work on AI. Then we will make judgement on your work and inform how and how much you can mine. This is the award to your contributions to AI from us.
 
